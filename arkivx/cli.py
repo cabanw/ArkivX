@@ -21,7 +21,14 @@ from . import core
 
 def _errores(errores) -> None:
     for error in errores or []:
-        print(f"  ⚠ Omitido: {error['ruta']} — {error['error']}", file=sys.stderr)
+        ruta = error.get("ruta") or error.get("origen") or "?"
+        print(f"  ⚠ Omitido: {ruta} — {error.get('error', '')}", file=sys.stderr)
+
+
+def _omitidas(omitidas) -> None:
+    if omitidas:
+        print(f"\n({len(omitidas)} carpetas omitidas: ocultas, de sistema, "
+              "de aplicaciones o enlaces.)")
 
 
 def cmd_scan(args) -> int:
@@ -42,6 +49,7 @@ def cmd_scan(args) -> int:
     for ext, datos in resultado["por_extension"].items():
         print(f"  {ext:<10} {datos['archivos']:>5} archivos   "
               f"{core.formato_tamano(datos['bytes'])}")
+    _omitidas(resultado["omitidas"])
     _errores(resultado["errores"])
     return 0
 
@@ -52,6 +60,7 @@ def cmd_dupes(args) -> int:
         print(json.dumps(resultado, ensure_ascii=False, indent=2))
         return 0
     _mostrar_duplicados(resultado)
+    _omitidas(resultado["omitidas"])
     _errores(resultado["errores"])
     return 0
 
@@ -138,6 +147,10 @@ def cmd_undo(args) -> int:
         print(f"  ⚠ {nota}")
     _errores(resultado["errores"])
     print(f"Total revertido: {len(resultado['revertidos'])} archivos.")
+    if not resultado["completa"]:
+        print("Algunos archivos no se pudieron revertir (en uso o sin "
+              "permiso). Ciérralos y vuelve a ejecutar: undo")
+        return 1
     return 0
 
 
@@ -147,7 +160,12 @@ def cmd_historial(args) -> int:
         print("El historial está vacío.")
         return 0
     for sesion in historial["sesiones"]:
-        estado = "deshecha" if sesion.get("deshecha") else "activa"
+        if sesion.get("deshecha"):
+            estado = "deshecha"
+        elif sesion.get("deshacer_parcial"):
+            estado = "deshecha a medias"
+        else:
+            estado = "activa"
         print(f"  [{estado}] {sesion['fecha']}  {sesion['tipo']:<10} "
               f"{len(sesion.get('movimientos', []))} movimientos  "
               f"carpeta: {sesion.get('carpeta')}  (id {sesion['id']})")
@@ -155,6 +173,13 @@ def cmd_historial(args) -> int:
 
 
 def main(argv=None) -> int:
+    # Con salida redirigida en Windows (cp1252) los símbolos ⚠ ✔ ↩ 🎉
+    # harían fallar print(); se sustituyen en lugar de reventar.
+    for flujo in (sys.stdout, sys.stderr):
+        try:
+            flujo.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     parser = argparse.ArgumentParser(
         prog="arkivx",
         description="ArkivX — organiza tus archivos y limpia duplicados. "

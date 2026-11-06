@@ -4,10 +4,18 @@ En Windows no requiere instalar nada: Tkinter viene con Python.
 Este módulo se puede importar sin pantalla y sin Tk disponible;
 la ventana solo se crea al ejecutar main() (python -m arkivx.app
 o python arkivx/app.py).
+
+Las operaciones largas (escanear, buscar duplicados, mover, eliminar,
+deshacer) corren en un hilo aparte para que la ventana no se congele.
+Tkinter no es seguro entre hilos: el hilo de trabajo solo llama a
+`core` y deja el resultado en una cola; la ventana lo recoge con
+`after()` y actualiza los controles desde el hilo principal.
 """
 from __future__ import annotations
 
+import queue
 import sys
+import threading
 from pathlib import Path
 
 try:
@@ -30,6 +38,7 @@ class ArkivXApp:
         self.raiz = raiz
         self.raiz.title("ArkivX — Cada archivo en su lugar")
         self.raiz.geometry("980x640")
+        self.raiz.protocol("WM_DELETE_WINDOW", self._cerrar)
 
         self.carpeta = tk.StringVar()
         self.estado = tk.StringVar(
@@ -39,9 +48,18 @@ class ArkivXApp:
         self.resultado_dupes = None
         self.plan = None
 
+        self._cola = queue.Queue()
+        self._ocupado = False
+        self._botones = []
         self._construir()
 
     # -- Construcción de la interfaz -------------------------------------
+    def _boton(self, padre, texto, comando, **pack):
+        boton = ttk.Button(padre, text=texto, command=comando)
+        boton.pack(side="left", **pack)
+        self._botones.append(boton)
+        return boton
+
     def _construir(self):
         superior = ttk.Frame(self.raiz, padding=10)
         superior.pack(fill="x")
@@ -49,23 +67,18 @@ class ArkivXApp:
         ttk.Entry(superior, textvariable=self.carpeta, width=70).pack(
             side="left", fill="x", expand=True, padx=5
         )
-        ttk.Button(superior, text="Seleccionar…",
-                   command=self._seleccionar).pack(side="left")
-        ttk.Button(superior, text="Escanear",
-                   command=self._escanear).pack(side="left", padx=(5, 0))
+        self._boton(superior, "Seleccionar…", self._seleccionar)
+        self._boton(superior, "Escanear", self._escanear, padx=(5, 0))
 
         acciones = ttk.Frame(self.raiz, padding=(10, 0, 10, 5))
         acciones.pack(fill="x")
-        ttk.Button(acciones, text="Buscar duplicados",
-                   command=self._buscar_duplicados).pack(side="left")
-        ttk.Button(acciones, text="Generar plan de organización",
-                   command=self._generar_plan).pack(side="left", padx=5)
-        ttk.Button(acciones, text="Aplicar plan",
-                   command=self._aplicar_plan).pack(side="left")
-        ttk.Button(acciones, text="Eliminar duplicados",
-                   command=self._eliminar_duplicados).pack(side="left", padx=5)
-        ttk.Button(acciones, text="Deshacer última sesión",
-                   command=self._deshacer).pack(side="left")
+        self._boton(acciones, "Buscar duplicados", self._buscar_duplicados)
+        self._boton(acciones, "Generar plan de organización",
+                    self._generar_plan, padx=5)
+        self._boton(acciones, "Aplicar plan", self._aplicar_plan)
+        self._boton(acciones, "Eliminar duplicados",
+                    self._eliminar_duplicados, padx=5)
+        self._boton(acciones, "Deshacer última sesión", self._deshacer)
 
         self.pestanas = ttk.Notebook(self.raiz)
         self.pestanas.pack(fill="both", expand=True, padx=10, pady=5)
@@ -99,6 +112,55 @@ class ArkivXApp:
         self.pestanas.add(marco, text=titulo)
         return arbol
 
+    # -- Trabajo en segundo plano -----------------------------------------
+    def _en_segundo_plano(self, mensaje, funcion, al_terminar):
+        """Ejecuta funcion() en un hilo; al_terminar(resultado) corre luego
+        en el hilo de la ventana. Los botones quedan desactivados mientras
+        tanto para que no se lancen dos operaciones a la vez."""
+        if self._ocupado:
+            return
+        self._ocupado = True
+        for boton in self._botones:
+            boton.state(["disabled"])
+        self.estado.set(mensaje)
+        self.raiz.config(cursor="watch")
+
+        def trabajo():
+            try:
+                salida = ("ok", funcion())
+            except Exception as exc:  # se muestra en la ventana, no se pierde
+                salida = ("error", exc)
+            self._cola.put((salida, al_terminar))
+
+        threading.Thread(target=trabajo, daemon=True).start()
+        self.raiz.after(100, self._revisar_cola)
+
+    def _revisar_cola(self):
+        try:
+            (tipo, valor), al_terminar = self._cola.get_nowait()
+        except queue.Empty:
+            self.raiz.after(100, self._revisar_cola)
+            return
+        self._ocupado = False
+        for boton in self._botones:
+            boton.state(["!disabled"])
+        self.raiz.config(cursor="")
+        if tipo == "error":
+            self.estado.set("La operación no se completó.")
+            messagebox.showerror("ArkivX", str(valor))
+            return
+        al_terminar(valor)
+
+    def _cerrar(self):
+        if self._ocupado:
+            messagebox.showwarning(
+                "ArkivX",
+                "Hay una operación en curso. Espera a que termine antes de "
+                "cerrar para no dejar archivos a medio mover.",
+            )
+            return
+        self.raiz.destroy()
+
     # -- Acciones ---------------------------------------------------------
     def _seleccionar(self):
         elegida = filedialog.askdirectory(title="Elige la carpeta a organizar")
@@ -106,6 +168,8 @@ class ArkivXApp:
             self.carpeta.set(elegida)
             self.resultado_dupes = None
             self.plan = None
+            self._limpiar(self.tree_dupes)
+            self._limpiar(self.tree_plan)
             self._escanear()
 
     def _carpeta_valida(self):
@@ -115,15 +179,20 @@ class ArkivXApp:
             return None
         return carpeta
 
+    @staticmethod
+    def _limpiar(arbol):
+        for fila in arbol.get_children():
+            arbol.delete(fila)
+
     def _escanear(self):
         carpeta = self._carpeta_valida()
-        if not carpeta:
-            return
-        try:
-            resultado = core.escanear(carpeta)
-        except ValueError as exc:
-            messagebox.showerror("ArkivX", str(exc))
-            return
+        if carpeta:
+            self._en_segundo_plano(
+                "Escaneando…", lambda: core.escanear(carpeta),
+                self._mostrar_diagnostico,
+            )
+
+    def _mostrar_diagnostico(self, resultado):
         lineas = [
             f"Carpeta: {resultado['carpeta']}",
             f"Archivos: {resultado['total_archivos']}   "
@@ -145,6 +214,14 @@ class ArkivXApp:
                 f"  {ext:<10} {datos['archivos']:>5} archivos   "
                 f"{core.formato_tamano(datos['bytes'])}"
             )
+        if resultado["omitidas"]:
+            lineas.append("")
+            lineas.append(
+                f"Carpetas omitidas ({len(resultado['omitidas'])}): ocultas, "
+                "de sistema, de aplicaciones o enlaces."
+            )
+            for omitida in resultado["omitidas"][:50]:
+                lineas.append(f"  {omitida['ruta']} — {omitida['motivo']}")
         if resultado["errores"]:
             lineas.append("")
             lineas.append("Omitidos (sin permiso o en uso):")
@@ -160,16 +237,17 @@ class ArkivXApp:
 
     def _buscar_duplicados(self):
         carpeta = self._carpeta_valida()
-        if not carpeta:
-            return
-        try:
-            self.resultado_dupes = core.encontrar_duplicados(carpeta)
-        except ValueError as exc:
-            messagebox.showerror("ArkivX", str(exc))
-            return
-        for fila in self.tree_dupes.get_children():
-            self.tree_dupes.delete(fila)
-        for i, grupo in enumerate(self.resultado_dupes["grupos"], 1):
+        if carpeta:
+            self._en_segundo_plano(
+                "Buscando duplicados (puede tardar en carpetas grandes)…",
+                lambda: core.encontrar_duplicados(carpeta),
+                self._mostrar_duplicados,
+            )
+
+    def _mostrar_duplicados(self, resultado):
+        self.resultado_dupes = resultado
+        self._limpiar(self.tree_dupes)
+        for i, grupo in enumerate(resultado["grupos"], 1):
             for archivo in grupo["archivos"]:
                 accion = ("✓ conservar" if archivo["ruta"] == grupo["conservar"]
                           else "✗ candidato a eliminar")
@@ -181,84 +259,103 @@ class ArkivXApp:
                 )
         self.pestanas.select(1)
         self.estado.set(
-            f"Duplicados: {self.resultado_dupes['total_grupos']} grupos, "
+            f"Duplicados: {resultado['total_grupos']} grupos, "
             f"espacio recuperable: "
-            f"{core.formato_tamano(self.resultado_dupes['espacio_recuperable'])}. "
+            f"{core.formato_tamano(resultado['espacio_recuperable'])}. "
             "Revisa la lista antes de eliminar."
         )
 
     def _generar_plan(self):
         carpeta = self._carpeta_valida()
-        if not carpeta:
-            return
-        try:
-            self.plan = core.plan_organizar(carpeta)
-        except ValueError as exc:
-            messagebox.showerror("ArkivX", str(exc))
-            return
-        for fila in self.tree_plan.get_children():
-            self.tree_plan.delete(fila)
-        for mov in self.plan["movimientos"]:
+        if carpeta:
+            self._en_segundo_plano(
+                "Generando plan…", lambda: core.plan_organizar(carpeta),
+                self._mostrar_plan,
+            )
+
+    def _mostrar_plan(self, plan):
+        self.plan = plan
+        self._limpiar(self.tree_plan)
+        for mov in plan["movimientos"]:
             self.tree_plan.insert(
                 "", "end",
                 values=(mov["origen"], mov["categoria"], mov["destino"]),
             )
         self.pestanas.select(2)
-        self.estado.set(
-            f"Plan listo (simulación): {len(self.plan['movimientos'])} "
-            "movimientos. Nada se ha movido todavía; revisa y pulsa "
-            "«Aplicar plan»."
-        )
+        mensaje = (f"Plan listo (simulación): {len(plan['movimientos'])} "
+                   "movimientos. Nada se ha movido todavía; revisa y pulsa "
+                   "«Aplicar plan».")
+        if plan["errores"]:
+            mensaje += f" {len(plan['errores'])} archivos no entran en el plan."
+        self.estado.set(mensaje)
 
     def _aplicar_plan(self):
         if not self.plan or not self.plan["movimientos"]:
             messagebox.showwarning(
                 "ArkivX", "Primero genera el plan de organización.")
             return
+        plan = self.plan
         if not messagebox.askyesno(
             "ArkivX",
-            f"¿Aplicar el plan? Se moverán "
-            f"{len(self.plan['movimientos'])} archivos a sus carpetas "
+            f"¿Aplicar el plan en\n{plan['carpeta']}?\n\nSe moverán "
+            f"{len(plan['movimientos'])} archivos a sus carpetas "
             "de categoría. Podrás deshacerlo desde el historial.",
         ):
             return
-        resultado = core.aplicar_plan(self.plan)
         self.plan = None
-        for fila in self.tree_plan.get_children():
-            self.tree_plan.delete(fila)
+        self._limpiar(self.tree_plan)
+        self._en_segundo_plano(
+            "Moviendo archivos…", lambda: core.aplicar_plan(plan),
+            self._plan_aplicado,
+        )
+
+    def _plan_aplicado(self, resultado):
         mensaje = (f"Plan aplicado: {len(resultado['movimientos'])} "
                    "archivos movidos.")
         if resultado["errores"]:
             mensaje += f" {len(resultado['errores'])} no se pudieron mover."
-        self.estado.set(mensaje)
+            messagebox.showwarning("ArkivX", self._resumen_errores(
+                mensaje, resultado["errores"]))
         self._escanear()
+        self.estado.set(mensaje)
 
     def _eliminar_duplicados(self):
         if not self.resultado_dupes or not self.resultado_dupes["grupos"]:
             messagebox.showwarning(
                 "ArkivX", "Primero busca duplicados en la carpeta.")
             return
-        total = sum(len(g["candidatos"])
-                    for g in self.resultado_dupes["grupos"])
+        resultado = self.resultado_dupes
+        total = sum(len(g["candidatos"]) for g in resultado["grupos"])
         if not messagebox.askyesno(
             "ArkivX",
-            f"¿Eliminar {total} duplicados? Se conserva siempre la copia "
-            "marcada como «conservar». Irán a la Papelera si send2trash "
-            "está instalado; si no, a la cuarentena de ~/.arkivx.",
+            f"¿Eliminar {total} duplicados en\n{resultado['carpeta']}?\n\n"
+            "Se conserva siempre la copia marcada como «conservar» y cada "
+            "archivo se vuelve a verificar antes de eliminarlo. Irán a la "
+            "Papelera si send2trash está instalado; si no, a la cuarentena.",
         ):
             return
-        resultado = core.eliminar_duplicados(self.resultado_dupes)
         self.resultado_dupes = None
-        for fila in self.tree_dupes.get_children():
-            self.tree_dupes.delete(fila)
-        self.estado.set(
-            f"Duplicados eliminados: {len(resultado['registros'])}. "
-            f"Errores: {len(resultado['errores'])}."
+        self._limpiar(self.tree_dupes)
+        self._en_segundo_plano(
+            "Verificando y eliminando duplicados…",
+            lambda: core.eliminar_duplicados(resultado),
+            self._duplicados_eliminados,
         )
+
+    def _duplicados_eliminados(self, resultado):
+        mensaje = (f"Duplicados eliminados: {len(resultado['registros'])}. "
+                   f"Omitidos o con error: {len(resultado['errores'])}.")
+        if resultado["errores"]:
+            messagebox.showwarning("ArkivX", self._resumen_errores(
+                mensaje, resultado["errores"]))
         self._escanear()
+        self.estado.set(mensaje)
 
     def _deshacer(self):
-        resultado = core.deshacer()
+        self._en_segundo_plano(
+            "Deshaciendo la última sesión…", core.deshacer, self._deshecho)
+
+    def _deshecho(self, resultado):
         if not resultado["ok"]:
             messagebox.showinfo("ArkivX", resultado["mensaje"])
             return
@@ -266,13 +363,27 @@ class ArkivXApp:
         mensaje = (f"Sesión deshecha ({sesion['tipo']} del {sesion['fecha']}): "
                    f"{len(resultado['revertidos'])} archivos revertidos.")
         if resultado["notas"]:
-            mensaje += "\n\n" + "\n".join(resultado["notas"])
-        if resultado["errores"]:
-            mensaje += (f"\n\n{len(resultado['errores'])} archivos no se "
-                        "pudieron revertir.")
+            mensaje += "\n\n" + "\n".join(resultado["notas"][:20])
+        if not resultado["completa"]:
+            mensaje = self._resumen_errores(
+                mensaje + "\n\nAlgunos archivos no se pudieron revertir (en "
+                "uso o sin permiso). Ciérralos y pulsa Deshacer otra vez.",
+                resultado["errores"],
+            )
         messagebox.showinfo("ArkivX", mensaje)
-        self.estado.set(mensaje.split("\n")[0])
-        self._escanear()
+        primera = mensaje.split("\n")[0]
+        if self.carpeta.get().strip():
+            self._escanear()
+        self.estado.set(primera)
+
+    @staticmethod
+    def _resumen_errores(mensaje, errores, maximo=10):
+        lineas = [mensaje, ""]
+        for error in errores[:maximo]:
+            lineas.append(f"• {error.get('ruta', '?')}: {error.get('error', '')}")
+        if len(errores) > maximo:
+            lineas.append(f"… y {len(errores) - maximo} más.")
+        return "\n".join(lineas)
 
 
 def main() -> int:
