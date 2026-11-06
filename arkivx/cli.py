@@ -75,12 +75,22 @@ def _mostrar_duplicados(resultado) -> None:
         print(f"\nGrupo {i}: {len(grupo['archivos'])} copias de {tamano} "
               f"(se recuperan {core.formato_tamano(grupo['espacio_recuperable'])})")
         for archivo in grupo["archivos"]:
-            marca = "✓ conservar" if archivo["ruta"] == grupo["conservar"] \
-                else "✗ candidato"
-            print(f"  {marca:<12} {archivo['ruta']}")
+            print(f"  {_marca(archivo, grupo):<12} {archivo['ruta']}")
     print(f"\nGrupos de duplicados: {resultado['total_grupos']}  "
+          f"Candidatos a eliminar: {resultado['total_candidatos']}  "
           f"Espacio recuperable: "
           f"{core.formato_tamano(resultado['espacio_recuperable'])}")
+    if any(a["protegido"] for g in resultado["grupos"] for a in g["archivos"]):
+        print("🔒 = dentro de un proyecto/paquete (.git, package.json, "
+              "solution.xml…): nunca se elimina.")
+
+
+def _marca(archivo, grupo) -> str:
+    if archivo.get("protegido"):
+        return "🔒 protegido"
+    if archivo["ruta"] == grupo["conservar"]:
+        return "✓ conservar"
+    return "✗ candidato"
 
 
 def cmd_organize(args) -> int:
@@ -111,7 +121,9 @@ def cmd_trash_dupes(args) -> int:
     resultado = core.encontrar_duplicados(args.carpeta)
     _mostrar_duplicados(resultado)
     _errores(resultado["errores"])
-    if not resultado["grupos"]:
+    if not resultado["total_candidatos"]:
+        if resultado["grupos"]:
+            print("\nTodas las copias están protegidas: no hay nada que eliminar.")
         return 0
     if not args.apply:
         print("\nSIMULACIÓN: no se eliminó nada. Los archivos marcados como "
