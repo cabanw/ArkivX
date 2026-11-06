@@ -1,0 +1,9 @@
+# ArkivX funciona sin dependencias: solo usa la biblioteca estándar.
+#
+# Opcional (recomendado en Windows): si send2trash está instalado, los
+# duplicados eliminados van a la Papelera de Reciclaje del sistema.
+# Sin él, van a la carpeta de cuarentena ~/.arkivx/cuarentena/ y el
+# botón Deshacer sí puede restaurarlos automáticamente.
+#
+# Para instalarlo:  pip install send2trash
+# send2trash>=1.8
