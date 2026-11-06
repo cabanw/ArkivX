@@ -51,7 +51,16 @@ biblioteca estándar (la Papelera real usa `send2trash`, opcional).
    - en duplicados, además: archivos vacíos (0 bytes, p. ej. los
      `__init__.py`), enlaces duros al mismo archivo y archivos que solo
      están en la nube (OneDrive), para no forzar su descarga.
-8. **Verificación antes de eliminar**: justo antes de enviar cada
+8. **Proyectos protegidos**: una carpeta con `.git`, `package.json`,
+   `requirements.txt`, `pyproject.toml`, `solution.xml`,
+   `[Content_Types].xml`, `.sln`, `.csproj`, `.pbip`… (y todo lo que hay
+   debajo) se considera un proyecto o paquete. Las copias de proyectos
+   (v1/v2, una solución de Power Platform descomprimida dos veces) son
+   intencionadas: sus archivos aparecen como 🔒 *protegido* y **nunca**
+   se eliminan. Si un archivo tiene copias sueltas fuera de proyectos, se
+   conserva una suelta y solo las demás sueltas son candidatas. Organizar
+   también se niega si la carpeta elegida es en sí un proyecto.
+9. **Verificación antes de eliminar**: justo antes de enviar cada
    duplicado a la Papelera/cuarentena, ArkivX vuelve a comprobar (SHA-256)
    que la copia que se conserva sigue existiendo e idéntica y que el
    candidato no cambió. Si algo cambió desde el análisis, se omite.

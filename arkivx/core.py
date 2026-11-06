@@ -91,6 +91,35 @@ CARPETAS_OMITIDAS = {
     "system volume information", "$recycle.bin",
 }
 
+# Marcadores de proyecto/paquete: una carpeta que contiene alguno de estos
+# (y todo lo que hay debajo) es una unidad que funciona completa. Las
+# copias de proyectos (v1/v2, una solución descomprimida dos veces…) son
+# intencionadas: ArkivX nunca elimina duplicados dentro de ellas.
+MARCADORES_PROYECTO = {
+    # control de versiones
+    ".git", ".hg", ".svn",
+    # Python, Node, .NET, Java, Go, Rust, PHP, Ruby
+    "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
+    "pipfile", "package.json", "go.mod", "cargo.toml", "pom.xml",
+    "build.gradle", "build.gradle.kts", "composer.json", "gemfile",
+    "makefile", "cmakelists.txt", "dockerfile",
+    # Power Platform (solución descomprimida) y paquetes Office/OPC
+    "solution.xml", "customizations.xml", "[content_types].xml",
+}
+# Por extensión: Visual Studio, Xcode y proyectos de Power BI (.pbip).
+_SUFIJOS_PROYECTO = (".sln", ".csproj", ".vbproj", ".fsproj", ".vcxproj",
+                     ".xcodeproj", ".pbip", ".pbir", ".pbism")
+
+
+def _es_carpeta_proyecto(nombres) -> bool:
+    """True si entre los nombres (archivos y carpetas) hay un marcador."""
+    for nombre in nombres:
+        n = nombre.lower()
+        if n in MARCADORES_PROYECTO or n.endswith(_SUFIJOS_PROYECTO):
+            return True
+    return False
+
+
 # Archivos de sistema que viven junto a los del usuario y no se tocan.
 ARCHIVOS_SISTEMA = {
     "desktop.ini", "thumbs.db", "ehthumbs.db", ".ds_store",
@@ -272,16 +301,28 @@ def _validar_carpeta(carpeta) -> Path:
     return p
 
 
-def _iter_archivos(raiz: Path, errores: list, omitidas: list):
+def _iter_archivos(raiz: Path, errores: list, omitidas: list,
+                   proyectos: dict | None = None):
     """Recorre la carpeta (recursivo) devolviendo (ruta, lstat) de archivos.
 
     No sigue enlaces ni uniones, salta carpetas de sistema, ocultas y de
     dependencias (anotadas en `omitidas`) y no devuelve archivos de
     sistema u ocultos. Lo que no se pudo leer se anota en `errores`.
+
+    Si se pasa `proyectos` (dict), se rellena con {carpeta: raíz del
+    proyecto} para cada carpeta que está dentro de un proyecto/paquete
+    (ver MARCADORES_PROYECTO). Se evalúa antes de omitir subcarpetas, así
+    un .git cuenta como marcador aunque no se recorra.
     """
     sistema = _rutas_sistema(raiz.anchor)
     for dirpath, dirnames, filenames in os.walk(raiz):
         actual = Path(dirpath)
+        if proyectos is not None:
+            padre = proyectos.get(str(actual.parent)) if actual != raiz else None
+            if padre is None and _es_carpeta_proyecto(dirnames + filenames):
+                padre = str(actual)
+            if padre is not None:
+                proyectos[str(actual)] = padre
         for nombre_dir in list(dirnames):
             sub = actual / nombre_dir
             try:
@@ -385,14 +426,21 @@ def encontrar_duplicados(carpeta) -> dict:
     Se ignoran: archivos vacíos (todos «coinciden» y suelen ser
     necesarios, p. ej. __init__.py), enlaces duros al mismo archivo
     (borrarlos no libera espacio) y archivos que solo están en la nube.
+
+    Archivos dentro de un proyecto/paquete (carpeta con .git,
+    package.json, solution.xml…) se marcan «protegido»: se muestran en
+    el grupo pero NUNCA son candidatos a eliminar. Si todas las copias
+    están protegidas, el grupo no tiene candidatos. Si hay copias sueltas,
+    se conserva una suelta y solo las demás sueltas son candidatas.
     """
     raiz = _validar_carpeta(carpeta)
     errores = []
     omitidas = []
+    proyectos = {}
 
     por_tamano = {}
     vistos = set()
-    for ruta, st in _iter_archivos(raiz, errores, omitidas):
+    for ruta, st in _iter_archivos(raiz, errores, omitidas, proyectos):
         if st.st_size == 0:
             continue
         if _solo_en_nube(st):
@@ -432,30 +480,41 @@ def encontrar_duplicados(carpeta) -> dict:
             for hash_completo, entradas_hash in por_hash.items():
                 if len(entradas_hash) < 2:
                     continue
-                archivos = [
-                    {"ruta": str(ruta), "tamano": tamano, "modificado": mtime}
-                    for ruta, mtime in entradas_hash
-                ]
-                conservar = sorted(
-                    archivos, key=lambda a: (len(a["ruta"]), a["modificado"])
-                )[0]
+                archivos = []
+                for ruta, mtime in entradas_hash:
+                    proyecto = proyectos.get(str(ruta.parent))
+                    archivos.append({
+                        "ruta": str(ruta),
+                        "tamano": tamano,
+                        "modificado": mtime,
+                        "protegido": proyecto is not None,
+                        "proyecto": proyecto,
+                    })
+                sueltos = [a for a in archivos if not a["protegido"]]
+                orden = lambda a: (len(a["ruta"]), a["modificado"])  # noqa: E731
+                if sueltos:
+                    conservar = sorted(sueltos, key=orden)[0]["ruta"]
+                    candidatos = [a["ruta"] for a in sueltos
+                                  if a["ruta"] != conservar]
+                else:
+                    conservar = None  # todas protegidas: no se toca ninguna
+                    candidatos = []
                 grupos.append({
                     "hash": hash_completo,
                     "tamano": tamano,
                     "archivos": archivos,
-                    "conservar": conservar["ruta"],
-                    "candidatos": [
-                        a["ruta"] for a in archivos
-                        if a["ruta"] != conservar["ruta"]
-                    ],
-                    "espacio_recuperable": tamano * (len(archivos) - 1),
+                    "conservar": conservar,
+                    "candidatos": candidatos,
+                    "espacio_recuperable": tamano * len(candidatos),
                 })
 
-    grupos.sort(key=lambda g: g["espacio_recuperable"], reverse=True)
+    grupos.sort(key=lambda g: (g["espacio_recuperable"], g["tamano"]),
+                reverse=True)
     return {
         "carpeta": str(raiz),
         "grupos": grupos,
         "total_grupos": len(grupos),
+        "total_candidatos": sum(len(g["candidatos"]) for g in grupos),
         "espacio_recuperable": sum(g["espacio_recuperable"] for g in grupos),
         "errores": errores,
         "omitidas": omitidas,
@@ -503,6 +562,12 @@ def plan_organizar(carpeta) -> dict:
     errores = []
     reservados = set()
     entradas = sorted(raiz.iterdir(), key=lambda p: p.name.lower())
+    if _es_carpeta_proyecto(e.name for e in entradas):
+        raise ValueError(
+            f"La carpeta parece un proyecto o paquete (tiene .git, "
+            f"package.json, solution.xml…). Reorganizar sus archivos lo "
+            f"rompería; ArkivX no la organiza: {raiz}"
+        )
     for entrada in entradas:
         try:
             st = _es_archivo_movible(entrada)
@@ -609,6 +674,10 @@ def eliminar_duplicados(resultado: dict) -> dict:
     registros = []
     errores = []
     for grupo in resultado.get("grupos", []):
+        if not grupo.get("candidatos") or not grupo.get("conservar"):
+            continue  # grupo protegido o sin nada que eliminar
+        protegidos = {a["ruta"] for a in grupo.get("archivos", [])
+                      if a.get("protegido")}
         conservar = Path(grupo["conservar"])
         try:
             conservar_ok = _sigue_igual(conservar, grupo)
@@ -624,6 +693,10 @@ def eliminar_duplicados(resultado: dict) -> dict:
             continue
         for candidato in grupo.get("candidatos", []):
             ruta = Path(candidato)
+            if candidato in protegidos:  # defensa extra: nunca dentro de proyectos
+                errores.append({"ruta": candidato,
+                                "error": "Dentro de un proyecto: protegido."})
+                continue
             try:
                 if not _sigue_igual(ruta, grupo):
                     errores.append({

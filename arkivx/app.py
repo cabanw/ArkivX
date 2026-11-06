@@ -249,8 +249,12 @@ class ArkivXApp:
         self._limpiar(self.tree_dupes)
         for i, grupo in enumerate(resultado["grupos"], 1):
             for archivo in grupo["archivos"]:
-                accion = ("✓ conservar" if archivo["ruta"] == grupo["conservar"]
-                          else "✗ candidato a eliminar")
+                if archivo.get("protegido"):
+                    accion = "🔒 protegido (proyecto)"
+                elif archivo["ruta"] == grupo["conservar"]:
+                    accion = "✓ conservar"
+                else:
+                    accion = "✗ candidato a eliminar"
                 self.tree_dupes.insert(
                     "", "end",
                     values=(archivo["ruta"],
@@ -260,6 +264,7 @@ class ArkivXApp:
         self.pestanas.select(1)
         self.estado.set(
             f"Duplicados: {resultado['total_grupos']} grupos, "
+            f"{resultado['total_candidatos']} candidatos, "
             f"espacio recuperable: "
             f"{core.formato_tamano(resultado['espacio_recuperable'])}. "
             "Revisa la lista antes de eliminar."
@@ -325,7 +330,12 @@ class ArkivXApp:
                 "ArkivX", "Primero busca duplicados en la carpeta.")
             return
         resultado = self.resultado_dupes
-        total = sum(len(g["candidatos"]) for g in resultado["grupos"])
+        total = resultado["total_candidatos"]
+        if not total:
+            messagebox.showinfo(
+                "ArkivX", "No hay nada que eliminar: todas las copias están "
+                          "dentro de proyectos protegidos.")
+            return
         if not messagebox.askyesno(
             "ArkivX",
             f"¿Eliminar {total} duplicados en\n{resultado['carpeta']}?\n\n"
