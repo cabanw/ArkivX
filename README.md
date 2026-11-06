@@ -28,21 +28,46 @@ biblioteca estándar (la Papelera real usa `send2trash`, opcional).
    `~/.arkivx/historial.json`. Deshacer revierte los movimientos de
    organización y restaura los duplicados de la cuarentena. (Los que
    fueron a la Papelera real se anotan como no restaurables
-   automáticamente: se recuperan desde la Papelera de Windows.)
+   automáticamente: se recuperan desde la Papelera de Windows.) Si algún
+   archivo no se puede revertir (en uso), la sesión queda pendiente y
+   volver a pulsar Deshacer reintenta solo los que faltan. El historial
+   se guarda de forma atómica; si se daña, se respalda como
+   `historial.danado-<fecha>.json` en lugar de perderse.
 6. **Guard de seguridad**: ArkivX se niega a operar sobre la raíz de un
-   disco o carpetas del sistema (Windows, Program Files, ProgramData,
-   System32…). Los archivos en uso o sin permiso se saltan y se reportan,
-   nunca se fuerzan.
+   disco, tu carpeta personal (`C:\Users\TuUsuario`) o la que la contiene
+   (`C:\Users`), y las carpetas del sistema (Windows, Program Files,
+   ProgramData…) o cualquier cosa dentro de ellas. La ruta se resuelve
+   antes de comprobarla, así que un acceso directo/unión que apunte a
+   `C:\Windows` también se bloquea. Una carpeta tuya que solo se llame
+   «Recovery» o «Windows» sí se puede usar. Los archivos en uso o sin
+   permiso se saltan y se reportan, nunca se fuerzan.
+7. **Qué nunca se toca** (ni se cuenta, ni se mueve, ni se elimina):
+   - enlaces simbólicos y uniones (junctions);
+   - archivos y carpetas ocultos o de sistema (atributo de Windows o
+     nombre que empieza por `.`), `desktop.ini`, `Thumbs.db`, archivos
+     de bloqueo de Office `~$…`;
+   - carpetas de aplicaciones y dependencias: `AppData`, `node_modules`,
+     `.git`, `.venv`, `venv`, `__pycache__`, `site-packages`…;
+   - en duplicados, además: archivos vacíos (0 bytes, p. ej. los
+     `__init__.py`), enlaces duros al mismo archivo y archivos que solo
+     están en la nube (OneDrive), para no forzar su descarga.
+8. **Verificación antes de eliminar**: justo antes de enviar cada
+   duplicado a la Papelera/cuarentena, ArkivX vuelve a comprobar (SHA-256)
+   que la copia que se conserva sigue existiendo e idéntica y que el
+   candidato no cambió. Si algo cambió desde el análisis, se omite.
 
 ## Cómo correrlo en Windows
 
 Requisito: Python 3.11 o superior (con Tkinter, que viene incluido en el
 instalador oficial de python.org).
 
+Todos los comandos se ejecutan desde la **raíz del repositorio** (la
+carpeta que contiene `README.md` y la subcarpeta `arkivx\`).
+
 ### Ventana (GUI)
 
 ```bat
-cd arkivx
+cd ArkivX
 python -m arkivx.app
 ```
 
@@ -54,7 +79,7 @@ También funciona `python arkivx\app.py`. Flujo: elige la carpeta →
 ### Línea de comandos (CLI)
 
 ```bat
-cd arkivx
+cd ArkivX
 python -m arkivx.cli scan "C:\Users\TuUsuario\Downloads"
 python -m arkivx.cli dupes "C:\Users\TuUsuario\Downloads"
 python -m arkivx.cli organize "C:\Users\TuUsuario\Downloads" --dry-run
@@ -76,15 +101,27 @@ pip install send2trash
 
 Sin `send2trash`, los duplicados van a la cuarentena
 (`%USERPROFILE%\.arkivx\cuarentena\`), que además sí se puede deshacer
-con un clic.
+con un clic. Si la carpeta analizada está en otra unidad (USB, `D:`), la
+cuarentena se crea en esa misma unidad (`D:\.arkivx-cuarentena\`) para
+no copiar archivos grandes entre discos ni llenar `C:`.
+
+### Pruebas
+
+```bat
+cd ArkivX
+python -m unittest discover -s tests -v
+```
 
 ## Generar el .exe con PyInstaller
 
 ```bat
-cd arkivx
+cd ArkivX
 pip install pyinstaller
-pyinstaller --noconfirm --windowed --name ArkivX arkivx\app.py
+pyinstaller --noconfirm --windowed --name ArkivX --paths . arkivx\app.py
 ```
+
+(`--paths .` asegura que PyInstaller encuentre el paquete `arkivx` al
+analizar `from arkivx import core`.)
 
 El ejecutable queda en `dist\ArkivX\ArkivX.exe`. (`--windowed` evita
 que se abra una consola detrás de la ventana.)
@@ -92,13 +129,15 @@ que se abra una consola detrás de la ventana.)
 ## Estructura
 
 ```
-arkivx/
+ArkivX/                ← raíz del repositorio (ejecutar comandos aquí)
 ├── arkivx/
 │   ├── __init__.py
 │   ├── core.py    ← motor: escaneo, hash, duplicados, plan, aplicar,
 │   │                papelera/cuarentena, historial y deshacer
 │   ├── cli.py     ← línea de comandos (usa core)
-│   └── app.py     ← ventana Tkinter (usa core)
+│   └── app.py     ← ventana Tkinter (usa core; tareas largas en un hilo)
+├── tests/
+│   └── test_core.py   ← pruebas unittest del motor
 ├── requirements.txt   ← vacío en la práctica: solo send2trash opcional
 └── README.md
 ```
@@ -130,5 +169,5 @@ Datos del usuario (fuera del proyecto): `%USERPROFILE%\.arkivx\` con
 - Limpieza programada con aviso (p. ej. revisar Descargas cada semana).
 - Sugerencias: archivos que no se abren hace un año, archivos gigantes.
 - Carpetas protegidas configurables por el usuario.
-- Soporte para discos externos y USB, barra de progreso en escaneos
-  largos.
+- Barra de progreso en escaneos largos (la ventana ya no se congela:
+  las operaciones corren en segundo plano).
