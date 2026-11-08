@@ -115,6 +115,56 @@ class TestDuplicados(BaseTemporal):
         self.assertTrue(candidato.exists())
 
 
+class TestProyectos(BaseTemporal):
+    """Caso real: dos versiones de un proyecto y una solución de Power
+    Platform descomprimida dos veces. Nada dentro debe eliminarse."""
+
+    def test_copias_de_proyecto_nunca_son_candidatas(self):
+        for v in ("v1", "v2"):
+            self.escribir(f"MCP/{v}/requirements.txt", b"x" if v == "v1" else b"y")
+            self.escribir(f"MCP/{v}/skills/narrative.json", b"{narrativa}")
+            self.escribir(f"MCP/{v}/README.md", b"# leeme")
+        resultado = core.encontrar_duplicados(self.trabajo)
+        self.assertGreater(resultado["total_grupos"], 0)
+        self.assertEqual(resultado["total_candidatos"], 0)
+        salida = core.eliminar_duplicados(resultado)
+        self.assertEqual(salida["registros"], [])
+
+    def test_solucion_power_platform_protegida(self):
+        for v in ("1_0_0_1", "1_0_0_5"):
+            self.escribir(f"Agente_{v}/[Content_Types].xml", b"<Types/>")
+            self.escribir(f"Agente_{v}/solution.xml", b"<s/>")
+            self.escribir(f"Agente_{v}/env/def.xml", b"<def/>")
+        self.assertEqual(
+            core.encontrar_duplicados(self.trabajo)["total_candidatos"], 0)
+
+    def test_marcador_git_aunque_la_carpeta_se_omita(self):
+        for v in ("a", "b"):
+            (self.trabajo / v / ".git").mkdir(parents=True)
+            self.escribir(f"{v}/main.py", b"print(1)")
+        self.assertEqual(
+            core.encontrar_duplicados(self.trabajo)["total_candidatos"], 0)
+
+    def test_copia_suelta_si_se_elimina_y_la_del_proyecto_no(self):
+        self.escribir("proyecto/package.json", b"{}")
+        dentro = self.escribir("proyecto/logo.png", b"PNG")
+        suelta1 = self.escribir("logo.png", b"PNG")
+        suelta2 = self.escribir("descargas/logo (1).png", b"PNG")
+        resultado = core.encontrar_duplicados(self.trabajo)
+        grupo = [g for g in resultado["grupos"] if g["tamano"] == 3][0]
+        self.assertEqual(grupo["conservar"], str(suelta1))
+        self.assertEqual(grupo["candidatos"], [str(suelta2)])
+        core.eliminar_duplicados(resultado)
+        self.assertTrue(dentro.exists() and suelta1.exists())
+        self.assertFalse(suelta2.exists())
+
+    def test_no_organiza_una_carpeta_que_es_proyecto(self):
+        self.escribir("package.json", b"{}")
+        self.escribir("index.js", b"1")
+        with self.assertRaises(ValueError):
+            core.plan_organizar(self.trabajo)
+
+
 class TestOrganizar(BaseTemporal):
     def test_plan_omite_archivos_de_sistema_y_ocultos(self):
         self.escribir("desktop.ini", b"x")
