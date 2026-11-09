@@ -270,6 +270,74 @@ class TestCuarentenaUnidad(BaseTemporal):
                          self.home / ".arkivx" / "cuarentena")
 
 
+class TestDiscoExterno(BaseTemporal):
+    """Raíz de un disco de datos, copias de seguridad, Lightroom y RAW."""
+
+    @unittest.skipUnless(os.name == "nt", "solo Windows")
+    def test_raiz_de_disco_de_datos_solo_lectura(self):
+        raiz = self.trabajo.anchor
+        with mock.patch.object(core, "_unidad_sistema", return_value="z:"):
+            self.assertTrue(core.es_raiz_unidad_datos(raiz))
+            self.assertEqual(core._validar_carpeta(raiz, solo_lectura=True),
+                             Path(raiz))
+            self.assertEqual(
+                core._validar_carpeta(raiz.rstrip("\\"), solo_lectura=True),
+                Path(raiz))
+            with self.assertRaises(ValueError):
+                core._validar_carpeta(raiz)
+            with self.assertRaises(ValueError):
+                core.plan_organizar(raiz)
+
+    def test_raiz_del_disco_del_sistema_sigue_bloqueada(self):
+        raiz = self.trabajo.anchor
+        if os.name == "nt":
+            with mock.patch.object(core, "_unidad_sistema",
+                                   return_value=os.path.normcase(raiz[:2])):
+                self.assertFalse(core.es_raiz_unidad_datos(raiz))
+                with self.assertRaises(ValueError):
+                    core._validar_carpeta(raiz, solo_lectura=True)
+        else:
+            with self.assertRaises(ValueError):
+                core._validar_carpeta(raiz, solo_lectura=True)
+
+    def test_subcarpeta_no_es_raiz_de_datos(self):
+        self.assertFalse(core.es_raiz_unidad_datos(self.trabajo))
+
+    def test_windows_image_backup_protegido(self):
+        for v in ("a", "b"):
+            self.escribir(f"WindowsImageBackup/PC/Backup {v}/disco.vhdx", b"VHD")
+        res = core.encontrar_duplicados(self.trabajo)
+        self.assertGreater(res["total_grupos"], 0)
+        self.assertEqual(res["total_candidatos"], 0)
+        destino = self.trabajo / "WindowsImageBackup" / "PC" / "Backup a"
+        with self.assertRaises(ValueError):
+            core.plan_organizar(destino)
+        with self.assertRaises(ValueError):
+            core.plan_organizar(self.trabajo / "WindowsImageBackup")
+
+    def test_respaldo_se_sigue_contando_en_escaneo(self):
+        self.escribir("WindowsImageBackup/PC/disco.vhdx", b"VHDX")
+        res = core.escanear(self.trabajo)
+        self.assertEqual(res["total_archivos"], 1)
+        self.assertEqual(res["por_categoria"]["Discos virtuales"]["archivos"], 1)
+
+    def test_catalogo_lightroom_protegido(self):
+        for v in ("v1", "v2"):
+            self.escribir(f"LR/{v}/Catalogo.lrcat", b"cat" + v.encode())
+            self.escribir(f"LR/{v}/Catalogo Previews.lrdata/0/a.lrprev", b"PREV")
+        self.assertEqual(
+            core.encontrar_duplicados(self.trabajo)["total_candidatos"], 0)
+        with self.assertRaises(ValueError):
+            core.plan_organizar(self.trabajo / "LR" / "v1")
+        with self.assertRaises(ValueError):
+            core.plan_organizar(self.trabajo / "LR" / "v1" / "Catalogo Previews.lrdata")
+
+    def test_raw_de_camara_son_imagenes(self):
+        for ext in (".NEF", ".cr2", ".arw", ".dng"):
+            self.assertEqual(core.categoria_de(Path("foto" + ext)), "Imágenes")
+        self.assertEqual(core.categoria_de(Path("x.vhdx")), "Discos virtuales")
+
+
 class TestCli(unittest.TestCase):
     def test_errores_con_clave_origen_no_revienta(self):
         salida = io.StringIO()

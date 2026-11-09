@@ -57,6 +57,10 @@ CATEGORIAS = {
     "Imágenes": {
         ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp",
         ".tif", ".tiff", ".ico", ".heic", ".raw",
+        # RAW de cámara: Nikon, Canon, Sony, Adobe, Olympus, Panasonic,
+        # Fujifilm, Pentax, Samsung
+        ".nef", ".nrw", ".cr2", ".cr3", ".arw", ".dng", ".orf", ".rw2",
+        ".raf", ".pef", ".srw",
     },
     "Videos": {
         ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
@@ -76,6 +80,9 @@ CATEGORIAS = {
         ".json", ".xml", ".yml", ".yaml", ".java", ".c", ".h", ".cpp",
         ".hpp", ".cs", ".php", ".rb", ".go", ".rs", ".sh", ".bat",
         ".ps1", ".sql", ".ipynb",
+    },
+    "Discos virtuales": {
+        ".iso", ".img", ".vhd", ".vhdx", ".vmdk", ".vdi",
     },
 }
 ORDEN_CATEGORIAS = list(CATEGORIAS) + ["Otros"]
@@ -106,9 +113,25 @@ MARCADORES_PROYECTO = {
     # Power Platform (solución descomprimida) y paquetes Office/OPC
     "solution.xml", "customizations.xml", "[content_types].xml",
 }
-# Por extensión: Visual Studio, Xcode y proyectos de Power BI (.pbip).
+# Por extensión: Visual Studio, Xcode, proyectos de Power BI (.pbip) y
+# catálogos de Lightroom (.lrcat + carpeta «… Previews.lrdata»).
 _SUFIJOS_PROYECTO = (".sln", ".csproj", ".vbproj", ".fsproj", ".vcxproj",
-                     ".xcodeproj", ".pbip", ".pbir", ".pbism")
+                     ".xcodeproj", ".pbip", ".pbir", ".pbism",
+                     ".lrcat", ".lrdata")
+
+# Carpetas de copias de seguridad: todo lo que hay dentro funciona como un
+# conjunto (WindowsImageBackup guarda .vhdx que Windows necesita para
+# restaurar). Se escanean, pero nunca se organizan ni se eliminan
+# duplicados dentro de ellas.
+CARPETAS_RESPALDO = {"windowsimagebackup", "filehistory"}
+
+
+def _dentro_de_respaldo(ruta: Path) -> bool:
+    """True si la ruta es (o está dentro de) una copia de seguridad o un
+    catálogo de Lightroom."""
+    return any(parte.lower() in CARPETAS_RESPALDO
+               or parte.lower().endswith(".lrdata")
+               for parte in Path(ruta).parts)
 
 
 def _es_carpeta_proyecto(nombres) -> bool:
@@ -264,6 +287,26 @@ def _resolver(ruta) -> Path:
         return p.absolute()
 
 
+def _unidad_sistema() -> str:
+    """Unidad de Windows («c:»), normalizada; vacío fuera de Windows."""
+    if os.name != "nt":
+        return ""
+    return os.path.normcase(os.environ.get("SystemDrive", "C:")).rstrip("\\/")
+
+
+def es_raiz_unidad_datos(ruta) -> bool:
+    """True si la ruta es la raíz de un disco que NO es el del sistema
+    (D:\\, un disco USB…). Solo Windows; las raíces de red no cuentan."""
+    if os.name != "nt":
+        return False
+    p = _resolver(ruta)
+    if p.parent != p:
+        return False
+    unidad = os.path.normcase(p.drive)
+    return (bool(re.fullmatch(r"[a-z]:", unidad))
+            and unidad != _unidad_sistema())
+
+
 def es_carpeta_protegida(ruta) -> bool:
     """True si la ruta es peligrosa para operar.
 
@@ -286,13 +329,27 @@ def es_carpeta_protegida(ruta) -> bool:
     return any(_dentro_de(texto, s) for s in _rutas_sistema(p.anchor))
 
 
-def _validar_carpeta(carpeta) -> Path:
+def _validar_carpeta(carpeta, solo_lectura: bool = False) -> Path:
+    """Comprueba que la carpeta existe y que ArkivX puede operar en ella.
+
+    Con `solo_lectura=True` (escanear, buscar duplicados) se permite la
+    raíz de un disco de datos (D:\\, un USB). Organizar nunca la acepta.
+    """
+    if re.fullmatch(r"[A-Za-z]:", str(carpeta).strip()):  # «D:» -> «D:\»
+        carpeta = str(carpeta).strip() + os.sep
     original = Path(carpeta).expanduser()
     if not original.exists():
         raise ValueError(f"La carpeta no existe: {original}")
     if not original.is_dir():
         raise ValueError(f"No es una carpeta: {original}")
     p = _resolver(original)
+    if es_raiz_unidad_datos(p):
+        if solo_lectura:
+            return p
+        raise ValueError(
+            f"Raíz de disco: se puede escanear y buscar duplicados, pero "
+            f"no organizar. Elige una subcarpeta: {p}"
+        )
     if es_carpeta_protegida(carpeta) or es_carpeta_protegida(p):
         raise ValueError(
             f"Carpeta protegida (sistema, raíz del disco o carpeta personal), "
@@ -319,7 +376,9 @@ def _iter_archivos(raiz: Path, errores: list, omitidas: list,
         actual = Path(dirpath)
         if proyectos is not None:
             padre = proyectos.get(str(actual.parent)) if actual != raiz else None
-            if padre is None and _es_carpeta_proyecto(dirnames + filenames):
+            if padre is None and (
+                    actual.name.lower() in CARPETAS_RESPALDO
+                    or _es_carpeta_proyecto(dirnames + filenames)):
                 padre = str(actual)
             if padre is not None:
                 proyectos[str(actual)] = padre
@@ -361,7 +420,7 @@ def _iter_archivos(raiz: Path, errores: list, omitidas: list,
 # ---------------------------------------------------------------------------
 def escanear(carpeta) -> dict:
     """Estadísticas de la carpeta: totales, por categoría y por extensión."""
-    raiz = _validar_carpeta(carpeta)
+    raiz = _validar_carpeta(carpeta, solo_lectura=True)
     por_categoria = {c: {"archivos": 0, "bytes": 0} for c in ORDEN_CATEGORIAS}
     por_extension = {}
     errores = []
@@ -433,7 +492,7 @@ def encontrar_duplicados(carpeta) -> dict:
     están protegidas, el grupo no tiene candidatos. Si hay copias sueltas,
     se conserva una suelta y solo las demás sueltas son candidatas.
     """
-    raiz = _validar_carpeta(carpeta)
+    raiz = _validar_carpeta(carpeta, solo_lectura=True)
     errores = []
     omitidas = []
     proyectos = {}
@@ -561,11 +620,17 @@ def plan_organizar(carpeta) -> dict:
     movimientos = []
     errores = []
     reservados = set()
+    if _dentro_de_respaldo(raiz):
+        raise ValueError(
+            f"La carpeta es (o está dentro de) una copia de seguridad o un "
+            f"catálogo de Lightroom. Mover sus archivos la dejaría "
+            f"inservible; ArkivX no la organiza: {raiz}"
+        )
     entradas = sorted(raiz.iterdir(), key=lambda p: p.name.lower())
     if _es_carpeta_proyecto(e.name for e in entradas):
         raise ValueError(
-            f"La carpeta parece un proyecto o paquete (tiene .git, "
-            f"package.json, solution.xml…). Reorganizar sus archivos lo "
+            f"La carpeta parece un proyecto, paquete o catálogo (tiene .git, "
+            f"package.json, .lrcat…). Reorganizar sus archivos lo "
             f"rompería; ArkivX no la organiza: {raiz}"
         )
     for entrada in entradas:
