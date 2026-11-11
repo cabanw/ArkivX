@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+        python: ["3.10", "3.12", "3.13"]
+        include:
+          # El motor tiene ramas no-Windows; que no se rompan en silencio.
+          - os: ubuntu-latest
+            python: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+
+      # Flujo completo con salida redirigida (como en un script):
+      # simular -> eliminar a cuarentena -> deshacer. send2trash no está
+      # instalado, así que va a la cuarentena de ~/.arkivx (desechable
+      # en el runner) y Deshacer debe restaurarlo.
+      - name: CLI smoke test (simulate, apply, undo)
+        shell: bash
+        run: |
+          set -euo pipefail
+          D="$RUNNER_TEMP/demo"
+          mkdir -p "$D/sub"
+          echo igual > "$D/a.txt"
+          echo igual > "$D/sub/a.txt"
+          python -m arkivx.cli --help > /dev/null
+          python -m arkivx.cli trash-dupes "$D" > "$RUNNER_TEMP/sim.txt"
+          test -f "$D/a.txt" && test -f "$D/sub/a.txt"   # simulación: nada cambia
+          python -m arkivx.cli trash-dupes "$D" --apply > "$RUNNER_TEMP/apply.txt"
+          n=$(find "$D" -name a.txt | wc -l)
+          [ "$n" -eq 1 ] || { echo "Esperaba 1 copia tras --apply, hay $n"; exit 1; }
+          python -m arkivx.cli undo > "$RUNNER_TEMP/undo.txt"
+          test -f "$D/a.txt" && test -f "$D/sub/a.txt"   # deshacer restaura
+
+  build-exe:
+    name: Build ArkivX.exe
+    needs: tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build
+        shell: pwsh
+        run: ./packaging/build_exe.ps1
+
+      - name: Smoke test (window opens and stays open)
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\ArkivX.exe -PassThru
+          Start-Sleep -Seconds 10
+          $vivos = Get-Process ArkivX -ErrorAction SilentlyContinue
+          if (-not $vivos) { throw "ArkivX.exe se cerró solo (exit $($p.ExitCode))." }
+          "ArkivX.exe sigue abierto: $($vivos.Count) proceso(s)."
+          $vivos | Stop-Process -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ArkivX-exe-${{ github.sha }}
+          path: dist/ArkivX.exe
+          retention-days: 30
