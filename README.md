@@ -191,6 +191,8 @@ Datos del usuario (fuera del proyecto): `%USERPROFILE%\.arkivx\` con
 
 ## Fase 2 (fuera del MVP)
 
+Plan detallado a corto y largo plazo: [ROADMAP.md](ROADMAP.md).
+
 - Organización por fecha (subcarpetas año/mes) y reglas personalizadas
   por palabra clave o proyecto.
 - Elegir manualmente qué copia conservar y qué duplicados eliminar
