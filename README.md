@@ -41,6 +41,12 @@ biblioteca estándar (la Papelera real usa `send2trash`, opcional).
    `C:\Windows` también se bloquea. Una carpeta tuya que solo se llame
    «Recovery» o «Windows» sí se puede usar. Los archivos en uso o sin
    permiso se saltan y se reportan, nunca se fuerzan.
+   **Discos externos**: la raíz de un disco que no es el del sistema
+   (`D:\`, un USB) sí se puede **escanear** y **buscar duplicados** (solo
+   leen). **Organizar** y **eliminar duplicados** siguen bloqueados ahí
+   (en un disco suele haber juegos o apps instaladas con archivos
+   idénticos que no se deben borrar): elige una subcarpeta. La
+   raíz de `C:\` sigue bloqueada para todo.
 7. **Qué nunca se toca** (ni se cuenta, ni se mueve, ni se elimina):
    - enlaces simbólicos y uniones (junctions);
    - archivos y carpetas ocultos o de sistema (atributo de Windows o
@@ -60,6 +66,10 @@ biblioteca estándar (la Papelera real usa `send2trash`, opcional).
    se eliminan. Si un archivo tiene copias sueltas fuera de proyectos, se
    conserva una suelta y solo las demás sueltas son candidatas. Organizar
    también se niega si la carpeta elegida es en sí un proyecto.
+   Lo mismo aplica a **catálogos de Lightroom** (`.lrcat`,
+   `… Previews.lrdata`) y a **copias de seguridad de Windows**
+   (`WindowsImageBackup`, `FileHistory`): se escanean y cuentan, pero
+   nunca se organizan ni se eliminan duplicados dentro.
 9. **Verificación antes de eliminar**: justo antes de enviar cada
    duplicado a la Papelera/cuarentena, ArkivX vuelve a comprobar (SHA-256)
    que la copia que se conserva sigue existiendo e idéntica y que el

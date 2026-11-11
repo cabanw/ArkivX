@@ -125,6 +125,10 @@ def cmd_trash_dupes(args) -> int:
         if resultado["grupos"]:
             print("\nTodas las copias están protegidas: no hay nada que eliminar.")
         return 0
+    if core.es_raiz_unidad_datos(resultado["carpeta"]):
+        print("\nRaíz de disco: aquí solo se pueden buscar duplicados, no "
+              "eliminarlos. Elige una subcarpeta y vuelve a ejecutar.")
+        return 0 if not args.apply else 1
     if not args.apply:
         print("\nSIMULACIÓN: no se eliminó nada. Los archivos marcados como "
               "«candidato» son los que se eliminarían.")
