@@ -133,17 +133,24 @@ python -m unittest discover -s tests -v
 
 ## Generar el .exe con PyInstaller
 
+Desde la raíz del repositorio:
+
 ```bat
-cd ArkivX
-pip install pyinstaller
-pyinstaller --noconfirm --windowed --name ArkivX --paths . arkivx\app.py
+powershell -ExecutionPolicy Bypass -File packaging\build_exe.ps1
 ```
 
-(`--paths .` asegura que PyInstaller encuentre el paquete `arkivx` al
-analizar `from arkivx import core`.)
+El script corre las pruebas (si fallan, no compila), crea un entorno
+virtual limpio en `build\venv` (así el .exe no arrastra paquetes del
+Python global, p. ej. Anaconda), instala PyInstaller y genera
+**`dist\ArkivX.exe`**: un solo archivo, sin consola, que no necesita
+Python instalado (~11 MB).
 
-El ejecutable queda en `dist\ArkivX\ArkivX.exe`. (`--windowed` evita
-que se abra una consola detrás de la ventana.)
+Por defecto **no** incluye send2trash: los duplicados eliminados van a la
+cuarentena y Deshacer puede restaurarlos. Con `-ConPapelera` van a la
+Papelera de Windows, pero Deshacer ya no los restaura.
+
+El .exe no está firmado: la primera vez Windows SmartScreen puede
+avisar («Más información» → «Ejecutar de todas formas»).
 
 ## Estructura
 
@@ -157,6 +164,9 @@ ArkivX/                ← raíz del repositorio (ejecutar comandos aquí)
 │   └── app.py     ← ventana Tkinter (usa core; tareas largas en un hilo)
 ├── tests/
 │   └── test_core.py   ← pruebas unittest del motor
+├── packaging/
+│   ├── ArkivX.py      ← punto de entrada para PyInstaller
+│   └── build_exe.ps1  ← genera dist\ArkivX.exe
 ├── requirements.txt   ← vacío en la práctica: solo send2trash opcional
 └── README.md
 ```
