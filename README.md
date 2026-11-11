@@ -43,7 +43,9 @@ biblioteca estándar (la Papelera real usa `send2trash`, opcional).
    permiso se saltan y se reportan, nunca se fuerzan.
    **Discos externos**: la raíz de un disco que no es el del sistema
    (`D:\`, un USB) sí se puede **escanear** y **buscar duplicados** (solo
-   leen). **Organizar** sigue bloqueado ahí: elige una subcarpeta. La
+   leen). **Organizar** y **eliminar duplicados** siguen bloqueados ahí
+   (en un disco suele haber juegos o apps instaladas con archivos
+   idénticos que no se deben borrar): elige una subcarpeta. La
    raíz de `C:\` sigue bloqueada para todo.
 7. **Qué nunca se toca** (ni se cuenta, ni se mueve, ni se elimina):
    - enlaces simbólicos y uniones (junctions);

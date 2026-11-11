@@ -376,8 +376,11 @@ def _iter_archivos(raiz: Path, errores: list, omitidas: list,
         actual = Path(dirpath)
         if proyectos is not None:
             padre = proyectos.get(str(actual.parent)) if actual != raiz else None
+            # _dentro_de_respaldo mira toda la ruta: cubre también el caso
+            # en que la carpeta elegida ya está dentro de un respaldo o de
+            # un «… Previews.lrdata» (la raíz no se ve al recorrer).
             if padre is None and (
-                    actual.name.lower() in CARPETAS_RESPALDO
+                    _dentro_de_respaldo(actual)
                     or _es_carpeta_proyecto(dirnames + filenames)):
                 padre = str(actual)
             if padre is not None:
@@ -728,8 +731,18 @@ def eliminar_duplicados(resultado: dict) -> dict:
     sistema (quedan registrados como NO restaurables automáticamente).
     Si no, van a la carpeta de cuarentena y SÍ se pueden deshacer.
     El archivo sugerido como «conservar» nunca se toca.
+
+    Si la búsqueda se hizo en la raíz de un disco de datos (D:\\, un USB)
+    se niega con ValueError: buscar ahí es solo lectura, eliminar exige
+    elegir una subcarpeta (así no se tocan bibliotecas de juegos o apps
+    instaladas en ese disco).
     """
     base = Path(resultado.get("carpeta", ""))
+    if es_raiz_unidad_datos(base):
+        raise ValueError(
+            f"Raíz de disco: aquí solo se pueden buscar duplicados, no "
+            f"eliminarlos. Elige una subcarpeta y vuelve a buscar: {base}"
+        )
     sello = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     try:
         from send2trash import send2trash

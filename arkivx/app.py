@@ -336,6 +336,12 @@ class ArkivXApp:
                 "ArkivX", "No hay nada que eliminar: todas las copias están "
                           "dentro de proyectos protegidos.")
             return
+        if core.es_raiz_unidad_datos(resultado["carpeta"]):
+            messagebox.showwarning(
+                "ArkivX", "En la raíz de un disco solo se pueden buscar "
+                          "duplicados, no eliminarlos. Elige una subcarpeta "
+                          "y vuelve a buscar.")
+            return
         if not messagebox.askyesno(
             "ArkivX",
             f"¿Eliminar {total} duplicados en\n{resultado['carpeta']}?\n\n"

@@ -315,6 +315,28 @@ class TestDiscoExterno(BaseTemporal):
         with self.assertRaises(ValueError):
             core.plan_organizar(self.trabajo / "WindowsImageBackup")
 
+    def test_subcarpeta_de_respaldo_elegida_directamente_protegida(self):
+        for v in ("a", "b"):
+            self.escribir(f"WindowsImageBackup/PC/Backup {v}/disco.vhdx", b"VHD")
+            self.escribir(f"LR/Cat Previews.lrdata/{v}/x.lrprev", b"PREV")
+        for sub in ("WindowsImageBackup/PC",
+                    "WindowsImageBackup/PC/Backup a/..",
+                    "LR/Cat Previews.lrdata"):
+            res = core.encontrar_duplicados(self.trabajo / sub)
+            self.assertGreater(res["total_grupos"], 0, sub)
+            self.assertEqual(res["total_candidatos"], 0, sub)
+
+    def test_no_elimina_duplicados_buscados_en_raiz_de_datos(self):
+        a = self.escribir("a/x.txt", b"igual")
+        b = self.escribir("b/x.txt", b"igual")
+        res = core.encontrar_duplicados(self.trabajo)
+        self.assertEqual(res["total_candidatos"], 1)
+        with mock.patch.object(core, "es_raiz_unidad_datos",
+                               return_value=True):
+            with self.assertRaises(ValueError):
+                core.eliminar_duplicados(res)
+        self.assertTrue(a.exists() and b.exists())
+
     def test_respaldo_se_sigue_contando_en_escaneo(self):
         self.escribir("WindowsImageBackup/PC/disco.vhdx", b"VHDX")
         res = core.escanear(self.trabajo)
